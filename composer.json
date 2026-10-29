@@ -1,5 +1,6 @@
 {
   "name": "estudiante/prestamo-equipos",
   "description": "Sistema SOAP de prestamo de equipos",
-  "require": {"econea/nusoap": "*"}
+  "require": {"econea/nusoap": "*",
+    "firebase/php-jwt": "^7.2"}
 }

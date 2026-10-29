@@ -1,77 +1,50 @@
 <?php
 // services/AuthService.php
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
 
 class AuthService {
+    private string $secretKey;
 
-    public function __construct(private PDO $db) {}
-
-    public function login(string $username, string $password): array {
-        $username = trim($username);
-        $password = trim($password);
-
-        $stmt = $this->db->prepare('SELECT id, nombre, password_hash FROM solicitantes WHERE username = ?');
-        $stmt->execute([$username]);
-        $solicitante = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$solicitante || !password_verify($password, $solicitante['password_hash'])) {
-            return ['exito' => false, 'mensaje' => 'Credenciales inválidas', 'datos' => null];
-        }
-
-        $token = bin2hex(random_bytes(32));
-        $expiracion = date('Y-m-d H:i:s', strtotime('+2 hours'));
-
-        $update = $this->db->prepare('UPDATE solicitantes SET token_acceso = ?, token_expiracion = ? WHERE id = ?');
-        $update->execute([$token, $expiracion, $solicitante['id']]);
-
-        return [
-            'exito' => true,
-            'mensaje' => 'Autenticacion exitosa',
-            'datos' => [
-                'token' => $token,
-                'expira' => $expiracion,
-                'nombre' => $solicitante['nombre']
-            ]
-        ];
+    public function __construct(private PDO $db) {
+        // Obtenemos la clave secreta compartida (puedes definirla en un archivo de config o variable de entorno)
+        $this->secretKey = "ClaveSecretaSuperSeguraParaAmbosServicios2026!";
     }
 
     /**
-     * Valida el encabezado estándar WS-Security (UsernameToken)
+     * Valida la cabecera WS-Security decodificando el JWT firmado simétricamente.
      */
-    public function validarWssSecurity(string $xmlInput): bool {
+    public function validarWssSecurity(string $xmlInput): ?array {
         if (empty($xmlInput)) {
-            return false;
+            return null;
         }
 
         $dom = new DOMDocument();
         libxml_use_internal_errors(true);
         if (!$dom->loadXML($xmlInput)) {
             libxml_clear_errors();
-            return false;
+            return null;
         }
 
         $xpath = new DOMXPath($dom);
         $xpath->registerNamespace('wsse', 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd');
 
-        $userNodes = $xpath->query('//wsse:Security/wsse:UsernameToken/wsse:Username');
         $passNodes = $xpath->query('//wsse:Security/wsse:UsernameToken/wsse:Password');
-
-        if ($userNodes->length === 0 || $passNodes->length === 0) {
-            return false;
+        if ($passNodes->length === 0) {
+            return null;
         }
 
-        $username = trim($userNodes->item(0)->nodeValue);
-        $token = trim($passNodes->item(0)->nodeValue);
+        $jwtToken = trim($passNodes->item(0)->nodeValue);
 
-        // Validar contra la BD que el usuario corresponda al token y este no haya expirado
-        $stmt = $this->db->prepare(
-            'SELECT id FROM solicitantes 
-             WHERE username = :username AND token_acceso = :token AND token_expiracion > NOW()'
-        );
-        $stmt->execute([
-            ':username' => $username,
-            ':token'    => $token
-        ]);
-        
-        return (bool) $stmt->fetch(PDO::FETCH_ASSOC);
+        try {
+            // Decodifica y verifica la firma simétrica del token
+            $decoded = JWT::decode($jwtToken, new Key($this->secretKey, 'HS256'));
+            
+            // Retorna los datos del usuario embebidos en el token (ej: id, username)
+            return (array) $decoded;
+        } catch (\Exception $e) {
+            // Token alterado, expirado o clave incorrecta
+            return null;
+        }
     }
 }
